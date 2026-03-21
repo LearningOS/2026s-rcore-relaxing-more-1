@@ -24,13 +24,13 @@
 
 ## Related Resources
 
-- [Learning Resource](https://github.com/LearningOS/rust-based-os-comp2025/blob/main/relatedinfo.md)
+- [Learning Resource](https://github.com/LearningOS/rust-based-os-comp2026/blob/main/relatedinfo.md)
 
 ## Setup
 
 ```bash
-$ git clone https://github.com/LearningOS/2025a-rcore-[YOUR_USER_NAME].git
-$ cd 2025a-rcore-[YOUR_USER_NAME]
+$ git clone https://github.com/LearningOS/2026s-rcore-[YOUR_USER_NAME].git
+$ cd 2026s-rcore-[YOUR_USER_NAME]
 ```
 
 ## Build & Run
