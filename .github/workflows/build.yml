@@ -45,6 +45,20 @@ jobs:
       - name: end
         id: end
         run: grep -a "Test passed" output.txt | grep -oP "\d{1,}/\d{1,}" | xargs -i echo "points={}" | tee $GITHUB_OUTPUT
+      - name: Require full points
+        run: |
+          POINTS='${{ steps.end.outputs.points }}'
+          if [ -z "$POINTS" ]; then
+            echo "points is empty"
+            exit 1
+          fi
+          GOT="${POINTS%%/*}"
+          TOTAL="${POINTS##*/}"
+          if [ "$GOT" != "$TOTAL" ]; then
+            echo "points is not full score: $POINTS"
+            exit 1
+          fi
+          echo "points is full score: $POINTS"
   deploy:
     if: github.repository != 'LearningOS/rCore-Tutorial-Code'
     name: Deploy to pages
