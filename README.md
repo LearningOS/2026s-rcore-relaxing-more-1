@@ -24,7 +24,7 @@
 
 ## Related Resources
 
-- [Learning Resource](https://github.com/LearningOS/rust-based-os-comp2026/blob/main/relatedinfo.md)
+- [Learning Resource](https://github.com/LearningOS/rust-based-os-comp2025/blob/main/relatedinfo.md)
 
 ## Setup
 
