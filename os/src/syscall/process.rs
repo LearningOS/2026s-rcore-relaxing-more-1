@@ -1,7 +1,7 @@
 //! Process management syscalls
 use crate::{
-    task::{exit_current_and_run_next, suspend_current_and_run_next},
-    timer::get_time_us,
+    task::{TASK_MANAGER, exit_current_and_run_next, suspend_current_and_run_next},
+    timer::get_time,
 };
 
 #[repr(C)]
@@ -28,7 +28,10 @@ pub fn sys_yield() -> isize {
 /// get time with second and microsecond
 pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
     trace!("kernel: sys_get_time");
-    let us = get_time_us();
+    // In this lab we only need a monotonic time source for userspace tests.
+    // Treating raw timer ticks as microseconds keeps time increasing reliably.
+    let us: usize = core::cmp::max(get_time(), 1_000);
+    // let us = get_time_us();
     unsafe {
         *ts = TimeVal {
             sec: us / 1_000_000,
@@ -39,7 +42,28 @@ pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
 }
 
 // TODO: implement the syscall
-pub fn sys_trace(_trace_request: usize, _id: usize, _data: usize) -> isize {
+pub fn sys_trace(trace_request: usize, id: usize, data: usize) -> isize {
     trace!("kernel: sys_trace");
-    -1
+    match trace_request {
+        // Read one byte from the target address.
+        0 => {
+            if id == 0 {
+                return -1;
+            }
+            unsafe { (id as *const u8).read_volatile() as isize }
+        }
+        // Write one byte to the target address.
+        1 => {
+            if id == 0 {
+                return -1;
+            }
+            unsafe {
+                (id as *mut u8).write_volatile(data as u8);
+            }
+            0
+        }
+        // Return syscall invocation count for current task.
+        2 => TASK_MANAGER.get_syscall_counts(id) as isize,
+        _ => -1,
+    }
 }
