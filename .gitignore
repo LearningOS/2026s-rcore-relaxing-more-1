@@ -20,3 +20,4 @@ pushall.sh
 ci-user/
 os/vendor/
 user/
+qemu-7.0.0/
