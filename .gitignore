@@ -21,3 +21,4 @@ ci-user/
 os/vendor/
 user/
 qemu-7.0.0/
+qemu-7.0.0.tar.xz
