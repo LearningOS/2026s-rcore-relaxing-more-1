@@ -179,3 +179,19 @@ pub fn translated_byte_buffer(token: usize, ptr: *const u8, len: usize) -> Vec<&
     }
     v
 }
+
+/// Translate a single byte reference from user space through page table
+pub fn translated_ref(token: usize, ptr: *const u8) -> Option<&'static mut u8> {
+    let page_table = PageTable::from_token(token);
+    let raw_addr = ptr as usize;
+    let va = VirtAddr::from(raw_addr);
+    if usize::from(va) != raw_addr {
+        return None;
+    }
+    let vpn = va.floor();
+    page_table.translate(vpn).map(|pte| {
+        let ppn = pte.ppn();
+        let offset = va.page_offset();
+        &mut ppn.get_bytes_array()[offset]
+    })
+}

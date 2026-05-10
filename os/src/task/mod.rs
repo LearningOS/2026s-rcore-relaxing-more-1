@@ -133,6 +133,41 @@ impl TaskManager {
         inner.tasks[cur].change_program_brk(size)
     }
 
+    /// Map anonymous pages into the current 'Running' task.
+    fn mmap_current(&self, start: usize, len: usize, prot: usize) -> bool {
+        let mut inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        inner.tasks[cur].mmap(start, len, prot)
+    }
+
+    /// Unmap pages from the current 'Running' task.
+    fn munmap_current(&self, start: usize, len: usize) -> bool {
+        let mut inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        inner.tasks[cur].munmap(start, len)
+    }
+
+    /// Increment the syscall count for the current 'Running' task.
+    fn add_syscall_count(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        if syscall_id < crate::config::MAX_SYSCALL_NUM {
+            inner.tasks[cur].syscall_times[syscall_id] = inner.tasks[cur].syscall_times[syscall_id]
+                .saturating_add(1);
+        }
+    }
+
+    /// Get the syscall count for the current 'Running' task.
+    fn get_syscall_count(&self, syscall_id: usize) -> Option<u32> {
+        let inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        if syscall_id < crate::config::MAX_SYSCALL_NUM {
+            Some(inner.tasks[cur].syscall_times[syscall_id])
+        } else {
+            None
+        }
+    }
+
     /// Switch current `Running` task to the task we have found,
     /// or there is no `Ready` task and we can exit with all applications completed
     fn run_next_task(&self) {
@@ -201,4 +236,25 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// Map anonymous pages into the current 'Running' task.
+pub fn mmap(start: usize, len: usize, prot: usize) -> bool {
+    TASK_MANAGER.mmap_current(start, len, prot)
+}
+
+/// Unmap pages from the current 'Running' task.
+
+pub fn munmap(start: usize, len: usize) -> bool {
+    TASK_MANAGER.munmap_current(start, len)
+}
+
+/// Increment the syscall count for the current 'Running' task.
+pub fn add_syscall_count(syscall_id: usize) {
+    TASK_MANAGER.add_syscall_count(syscall_id)
+}
+
+/// Get the syscall count for the current 'Running' task.
+pub fn get_syscall_count(syscall_id: usize) -> Option<u32> {
+    TASK_MANAGER.get_syscall_count(syscall_id)
 }

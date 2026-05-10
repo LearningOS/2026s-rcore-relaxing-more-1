@@ -1,6 +1,6 @@
 //! Types related to task management
 use super::TaskContext;
-use crate::config::TRAP_CONTEXT_BASE;
+use crate::config::{PAGE_SIZE, TRAP_CONTEXT_BASE};
 use crate::mm::{
     kernel_stack_position, MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE,
 };
@@ -28,6 +28,8 @@ pub struct TaskControlBlock {
 
     /// Program break
     pub program_brk: usize,
+    /// Syscall times
+    pub syscall_times: [u32; crate::config::MAX_SYSCALL_NUM],
 }
 
 impl TaskControlBlock {
@@ -63,9 +65,10 @@ impl TaskControlBlock {
             base_size: user_sp,
             heap_bottom: user_sp,
             program_brk: user_sp,
+                    syscall_times: [0; crate::config::MAX_SYSCALL_NUM],
         };
         // prepare TrapContext in user space
-        let trap_cx = task_control_block.get_trap_cx();
+        let trap_cx: &mut TrapContext = task_control_block.get_trap_cx();
         *trap_cx = TrapContext::app_init_context(
             entry_point,
             user_sp,
@@ -95,6 +98,76 @@ impl TaskControlBlock {
         } else {
             None
         }
+    }
+
+    /// Map anonymous pages with user permissions.
+    pub fn mmap(&mut self, start: usize, len: usize, prot: usize) -> bool {
+        // Check that start is page-aligned
+        if start % PAGE_SIZE != 0 {
+            return false;
+        }
+        // Check prot validity: other bits must be 0
+        if prot & !0x7 != 0 {
+            return false;
+        }
+        // Check prot has at least one permission bit set (cannot be all 0)
+        if prot & 0x7 == 0 {
+            return false;
+        }
+        // If len is 0, just return success (no-op)
+        if len == 0 {
+            return true;
+        }
+        // Calculate end address with page alignment for length
+        let end = start + len;
+        let aligned_end = (end + PAGE_SIZE - 1) / PAGE_SIZE * PAGE_SIZE;
+        // Check for overflow
+        if aligned_end < start {
+            return false;
+        }
+        // Check if any page in [start, aligned_end) is already mapped
+        if self.memory_set.is_overlapping(start.into(), aligned_end.into()) {
+            return false;
+        }
+        // Convert prot bits to MapPermission
+        let mut permission = MapPermission::U;
+        if prot & 1 != 0 {
+            permission |= MapPermission::R;
+        }
+        if prot & 2 != 0 {
+            permission |= MapPermission::W;
+        }
+        if prot & 4 != 0 {
+            permission |= MapPermission::X;
+        }
+        self.memory_set
+            .insert_framed_area(start.into(), aligned_end.into(), permission);
+        true
+    }
+
+    /// Remove an anonymous mapping created by `mmap`.
+    pub fn munmap(&mut self, start: usize, len: usize) -> bool {
+        // Check that start is page-aligned
+        if start % PAGE_SIZE != 0 {
+            return false;
+        }
+        // len == 0 should fail for munmap
+        if len == 0 {
+            return false;
+        }
+        // Calculate end address with page alignment for length
+        let end = start + len;
+        let aligned_end = (end + PAGE_SIZE - 1) / PAGE_SIZE * PAGE_SIZE;
+        // Check for overflow
+        if aligned_end < start {
+            return false;
+        }
+        // Check if any page in [start, aligned_end) is NOT mapped (exists unmapped gap)
+        if !self.memory_set.is_fully_mapped(start.into(), aligned_end.into()) {
+            return false;
+        }
+        // Remove the entire mapped area
+        self.memory_set.remove_area(start.into(), aligned_end.into())
     }
 }
 

@@ -10,6 +10,7 @@ use crate::config::{
 use crate::sync::UPSafeCell;
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
+use alloc::vec;
 use alloc::vec::Vec;
 use core::arch::asm;
 use lazy_static::*;
@@ -261,6 +262,74 @@ impl MemorySet {
         } else {
             false
         }
+    }
+
+    /// remove an area that exactly matches the given range
+    pub fn remove_area(&mut self, start: VirtAddr, end: VirtAddr) -> bool {
+        if let Some(index) = self.areas.iter().position(|area| {
+            area.vpn_range.get_start() == start.floor() && area.vpn_range.get_end() == end.ceil()
+        }) {
+            let mut area = self.areas.remove(index);
+            area.unmap(&mut self.page_table);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Remove all areas that overlap with [start, end)
+    pub fn remove_overlapping(&mut self, start: VirtAddr, end: VirtAddr) {
+        let start_vpn = start.floor();
+        let end_vpn = end.ceil();
+        self.areas.retain_mut(|area| {
+            let area_start = area.vpn_range.get_start();
+            let area_end = area.vpn_range.get_end();
+            // Check if areas overlap
+            if area_end <= start_vpn || area_start >= end_vpn {
+                // No overlap, keep it
+                true
+            } else {
+                // Overlaps, remove it
+                area.unmap(&mut self.page_table);
+                false
+            }
+        });
+    }
+
+    /// Check if [start, end) contains any already mapped pages
+    pub fn is_overlapping(&self, start: VirtAddr, end: VirtAddr) -> bool {
+        let start_vpn = start.floor();
+        let end_vpn = end.ceil();
+        self.areas.iter().any(|area| {
+            let area_start = area.vpn_range.get_start();
+            let area_end = area.vpn_range.get_end();
+            // Check if areas overlap
+            !(area_end <= start_vpn || area_start >= end_vpn)
+        })
+    }
+
+    /// Check if [start, end) is fully mapped (no gaps)
+    pub fn is_fully_mapped(&self, start: VirtAddr, end: VirtAddr) -> bool {
+        let start_vpn = start.floor();
+        let end_vpn = end.ceil();
+        let mut covered = vec![false; (end_vpn.0 - start_vpn.0) as usize];
+        
+        for area in &self.areas {
+            let area_start = area.vpn_range.get_start();
+            let area_end = area.vpn_range.get_end();
+            
+            // Calculate intersection with [start_vpn, end_vpn)
+            let inter_start = if area_start < start_vpn { start_vpn } else { area_start };
+            let inter_end = if area_end > end_vpn { end_vpn } else { area_end };
+            
+            if inter_start < inter_end {
+                for i in inter_start.0..inter_end.0 {
+                    covered[(i - start_vpn.0) as usize] = true;
+                }
+            }
+        }
+        
+        covered.iter().all(|&v| v)
     }
 }
 /// map area structure, controls a contiguous piece of virtual memory
