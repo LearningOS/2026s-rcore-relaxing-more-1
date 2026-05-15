@@ -2,11 +2,11 @@
 use alloc::sync::Arc;
 
 use crate::{
+    config::BIG_CONST,
     loader::get_app_data_by_name,
-    mm::{translated_refmut, translated_str},
+    mm::{MapPermission, VirtAddr, VirtPageNum, translated_byte_buffer, translated_refmut, translated_str},
     task::{
-        add_task, current_task, current_user_token, exit_current_and_run_next,
-        suspend_current_and_run_next,
+        TaskControlBlock, add_task, current_task, current_user_token, exit_current_and_run_next, suspend_current_and_run_next
     },
 };
 
@@ -106,29 +106,140 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
 pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+
+    let start = _ts as usize;
+    let end = start + core::mem::size_of::<TimeVal>();
+
+    let start_va: VirtAddr = start.into();
+    let end_va: VirtAddr = end.into();
+    let start_vpn = start_va.floor();
+    let end_vpn = end_va.ceil();
+    for vpn in start_vpn.0..end_vpn.0 {
+        let vpn = VirtPageNum(vpn);
+        if current_task()
+            .unwrap()
+            .inner_exclusive_access()
+            .memory_set
+            .translate(vpn)
+            .map(|pte| pte.is_valid())
+            .unwrap_or(false)
+            == false
+        {
+            return -1;
+        }
+    }
+
+    let us= crate::timer::get_time_us();
+    let sec = us / 1_000_000;
+    let usec = us % 1_000_000;
+
+    let usize_bytes = core::mem::size_of::<usize>();
+    let mut raw = [0u8; core::mem::size_of::<TimeVal>()];
+    raw[..usize_bytes].copy_from_slice(&sec.to_ne_bytes());
+    raw[usize_bytes..].copy_from_slice(&usec.to_ne_bytes());
+
+    let mut off = 0usize;
+    let bufs = translated_byte_buffer(current_user_token(), _ts as *const u8, core::mem::size_of::<TimeVal>());
+    for b in bufs {
+        let l =b.len();
+        b.copy_from_slice(&raw[off..off + l]);
+        off += l;
+    }
+    0
+
 }
 
 /// YOUR JOB: Implement mmap.
 pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    let _end = _start + _len;
+    let _start_va: VirtAddr = _start.into();
+    let _end_va: VirtAddr = _end.into();
+
+    if !_start_va.aligned() {
+        return -1;
+    }
+
+    if _port & !0x07 != 0 {
+        return -1;
+    }
+
+    if _port & 0x07 == 0 {
+        return -1;
+    }
+
+    let start_vpn = _start_va.floor();
+    let end_vpn = _end_va.ceil();
+
+    // Check for conflicts with existing mappings
+    for vpn in start_vpn.0..end_vpn.0 {
+        let vpn = VirtPageNum(vpn);
+        if current_task()
+            .unwrap()
+            .inner_exclusive_access()
+            .memory_set
+            .translate(vpn)
+            .map(|pte| pte.is_valid())
+            .unwrap_or(false)
+        {
+            return -1;
+        }
+    }
+
+    let mut map_perm = MapPermission::U;
+    if _port & 0x01 != 0 {
+        map_perm |= MapPermission::R;
+    }
+    if _port & 0x02 != 0 {
+        map_perm |= MapPermission::W;
+        map_perm |= MapPermission::R; // W requires R in RISC-V
+    }
+    if _port & 0x04 != 0 {
+        map_perm |= MapPermission::X;
+    }
+
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    if inner.memory_set.insert_framed_area_fallible(
+        _start.into(),
+        _end.into(),
+        map_perm,
+    ) {
+        0
+    } else {
+        -1
+    }
 }
 
 /// YOUR JOB: Implement munmap.
 pub fn sys_munmap(_start: usize, _len: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    let _start_va: VirtAddr = _start.into();
+    let _end_va: VirtAddr = (_start + _len).into();
+
+    if !_start_va.aligned() {
+        return -1;
+    }
+
+    let start_vpn = _start_va.floor();
+    let end_vpn = _end_va.ceil();
+
+    for vpn in start_vpn.0..end_vpn.0 {
+        let vpn = VirtPageNum(vpn);
+        if current_task()
+            .unwrap()
+            .inner_exclusive_access()
+            .memory_set
+            .translate(vpn)
+            .map(|pte| pte.is_valid())
+            .unwrap_or(false)
+            == false
+        {
+            return -1;
+        }
+    }
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    inner.memory_set.remove_area_with_start_vpn(VirtAddr::from(_start).floor());
+    0
 }
 
 /// change data segment size
@@ -144,18 +255,30 @@ pub fn sys_sbrk(size: i32) -> isize {
 /// YOUR JOB: Implement spawn.
 /// HINT: fork + exec =/= spawn
 pub fn sys_spawn(_path: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    let token = current_user_token();
+    let path = translated_str(token, _path);
+    if let Some(elf_data) = get_app_data_by_name(path.as_str()) {
+        let current_task = current_task().unwrap();
+        let task = Arc::new(TaskControlBlock::new(elf_data));
+        let pid = task.pid.0;
+        // add child to parent's children list
+        current_task.inner_exclusive_access().children.push(task.clone());
+        add_task(task.clone());
+        task.exec(elf_data);
+        pid as isize
+    } else {
+        -1
+    }
 }
 
 // YOUR JOB: Set task priority.
 pub fn sys_set_priority(_prio: isize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_set_priority NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    if _prio <= 1 {
+        return -1;
+    }
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+    inner.priority = _prio as usize;
+    inner.pass = (BIG_CONST / inner.priority) as u128;
+    _prio
 }

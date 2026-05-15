@@ -23,7 +23,14 @@ impl TaskManager {
     }
     /// Take a process out of the ready queue
     pub fn fetch(&mut self) -> Option<Arc<TaskControlBlock>> {
-        self.ready_queue.pop_front()
+        let min_task = self.ready_queue
+    .iter()
+    .min_by_key(|task| task.inner_exclusive_access().stride)
+    .map(|task| Arc::clone(task));
+        if let Some(ref task) = min_task {
+    self.ready_queue.retain(|t| !Arc::ptr_eq(t, task));
+}
+        min_task
     }
 }
 

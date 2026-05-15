@@ -60,6 +60,20 @@ impl MemorySet {
             None,
         );
     }
+    /// Insert a framed area, returning false if physical memory is exhausted.
+    pub fn insert_framed_area_fallible(
+        &mut self,
+        start_va: VirtAddr,
+        end_va: VirtAddr,
+        permission: MapPermission,
+    ) -> bool {
+        let mut map_area = MapArea::new(start_va, end_va, MapType::Framed, permission);
+        if !map_area.try_map(&mut self.page_table) {
+            return false;
+        }
+        self.areas.push(map_area);
+        true
+    }
     /// remove a area
     pub fn remove_area_with_start_vpn(&mut self, start_vpn: VirtPageNum) {
         if let Some((idx, area)) = self
@@ -358,6 +372,39 @@ impl MapArea {
         for vpn in self.vpn_range {
             self.map_one(page_table, vpn);
         }
+    }
+    /// Try to map the area, returning false if frame allocation fails.
+    pub fn try_map(&mut self, page_table: &mut PageTable) -> bool {
+        for vpn in self.vpn_range {
+            let ppn: PhysPageNum;
+            match self.map_type {
+                MapType::Identical => {
+                    ppn = PhysPageNum(vpn.0);
+                }
+                MapType::Framed => {
+                    match frame_alloc() {
+                        Some(frame) => {
+                            ppn = frame.ppn;
+                            self.data_frames.insert(vpn, frame);
+                        }
+                        None => {
+                            // Rollback: unmap all previously mapped pages
+                            for unmapped_vpn in self.vpn_range {
+                                if unmapped_vpn.0 < vpn.0 {
+                                    self.unmap_one(page_table, unmapped_vpn);
+                                } else {
+                                    break;
+                                }
+                            }
+                            return false;
+                        }
+                    }
+                }
+            }
+            let pte_flags = PTEFlags::from_bits(self.map_perm.bits).unwrap();
+            page_table.map(vpn, ppn, pte_flags);
+        }
+        true
     }
     pub fn unmap(&mut self, page_table: &mut PageTable) {
         for vpn in self.vpn_range {
